@@ -2,142 +2,177 @@
 #include "sys.h"
 #include "lcd.h"
 #include <stdlib.h>
+#include <math.h>
 #include "time.h"
 #include "keyled.h"
 #include "systick.h"
 #include "general.h"
+#include <stdio.h>
 
-#define cBACKCOLOR BLACK
-#define cBALLCOLOR RED
-#define cMINX 31
-#define cMINY 31
-#define cMAXX 200
-#define cMAXY 300
-const u8 c8R = 20;
-const float EPS = 1e-3;
 
-extern u16 vu16Time;
-void fNewPos(void);   //Éú³ÉÏÂÒ»µãµÄ×ø±ê¼°ÔË¶¯·½Ïò
-void fCreatPos(void); //´´½¨Ëæ»úµã¼°ÔË¶¯·½Ïò
-void fPaintBall(u16 v16Color);//ÔÚvfPosX,vfPosYµã»­v16Color£¬c8R°ë¾¶µÄÔ²
-//-------------------------------------
-static float vfDx,vfDy,vfDTmp;//x,y·½Ïò¸Ä±äÁ¿
-static float vfPosX ,vfPosY;//x,y×ø±êÖµ
+#define SCREEN_WIDTH 250
+#define SCREEN_HEIGHT 320
+#define EPS 1e-5;
+#define FRONT_COLOR WHITE
+#define BK_COLOR BLACK
+#define random(a,b) ((a)+rand()%((b)-(a)+1))
 
-//===============================================================
- int main(void)
- {	   
+typedef struct Point {
+	float x, y;
+}Point;
 
-	int viDirX,viDirY;
+typedef struct Ball {
+	Point pos; float r;
+	Point v;
+} Ball;
 
-	//»ñÈ¡Ëæ»úÊý
-	 
+Point PT_add(Point a, Point b) {
+	Point t;
+	t.x = a.x + b.x;
+	t.y = a.y + b.y;
+	return t;
+}
+Point PT_sub(Point a, Point b) {
+	Point t;
+	t.x = a.x - b.x;
+	t.y = a.y - b.y;
+	return t;
+}
+Point PT_mul(Point x, float a) {
+	x.x *= a;
+	x.y *= a;
+	return x;
+}
+float PT_dot(Point a, Point b) {
+	return a.x*b.x + a.y*b.y;
+}
+Point PT_getUnit(Point pt) {
+	float len = sqrt(pt.x*pt.x + pt.y*pt.y);
+	pt.x /= len;
+	pt.y /= len;
+	return pt;
+}
+int PT_isParallel(Point a, Point b) {
+	return fabs(a.x*b.y - b.x*a.y) < EPS;
+}
+//Á´±í£¬´øÍ·½Úµã
+typedef struct Ball_listNode {
+	struct Ball_listNode *next;
+	Ball *ball;
+} Ball_listNode;
+
+Ball_listNode *Ball_listHead;
+
+void Ball_init() {
+	Ball_listHead = malloc(sizeof(Ball_listNode));
+	Ball_listHead->next = NULL;
+}
+//Á´±íEND
+
+float dis(Point a,  Point b) {
+	return sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y));
+}
+int Ball_willCollide(Ball *ball1, Ball *ball2) {
+	Point npos1 = PT_add(ball1->pos, ball1->v);
+	Point npos2 = PT_add(ball2->pos, ball2->v);
+	return dis(npos1, npos2) < ball1->r + ball2->r;
+}
+Point PT_reflectDir(Point I, Point N) {
+	return PT_sub(I, PT_mul(N, 2*PT_dot(I, N)));
+}
+void Ball_move(Ball* ball) {
+	//¼ÆËãÓëÇ½ÃæµÄÅö×²
+	Point npos = PT_add(ball->pos, ball->v);
+	if(npos.x + ball->r > SCREEN_WIDTH || npos.x - ball->r < 0) {
+		fBeep(cBEEP_ON);
+		ball->v.x *= -1;
+	}
+	if(npos.y + ball->r > SCREEN_HEIGHT || npos.y - ball->r < 0) {
+		fBeep(cBEEP_ON);
+		ball->v.y *= -1;
+	}
+	//¼ÆËãÇòÓëÇòÖ®¼äµÄÅö×²
+	Ball_listNode *now = Ball_listHead->next;
+	while(now != NULL) {
+		Ball* ball1 = ball;
+		Ball* ball2 = now->ball;
+		if(ball1 == ball2) {
+			now = now->next;
+			continue;
+		}
+		//¼òµ¥Æð¼û£¬¼ÙÉèÖ»»áÓëÒ»¸öÇòÅö×²
+		if(Ball_willCollide(ball1, ball2)) {
+			ball1->v = PT_reflectDir(ball1->v, PT_getUnit(PT_sub(ball1->pos, ball2->pos)));
+			ball2->v = PT_reflectDir(ball2->v, PT_getUnit(PT_sub(ball2->pos, ball1->pos)));
+			fBeep(cBEEP_ON);
+			break;
+		}
+		now = now->next;
+	}
+	ball->pos = PT_add(ball->pos, ball->v);
+}
+
+
+void Ball_update(Ball* ball) {
+	Ball_move(ball);
+}
+
+void Ball_draw(Ball *ball, int color) {
+	POINT_COLOR = color;
+	LCD_Draw_Circle(ball->pos.x, ball->pos.y, ball->r);
+	LCD_Draw_Circle(ball->pos.x, ball->pos.y, ball->r - 1);
+	LCD_Draw_Circle(ball->pos.x, ball->pos.y, ball->r - 2);
+}
+
+void BallList_update() {
+	Ball_listNode *now = Ball_listHead->next;
+	while(now != NULL) {
+		Ball_update(now->ball);
+		now = now->next;
+	}
+}
+
+void BallList_draw(int color) {
+	Ball_listNode *now = Ball_listHead->next;
+	while(now != NULL) {
+		Ball_draw(now->ball, color);
+		now = now->next;
+	}
+}
+void BallList_addNewBall(float x, float y, float r, float vx, float vy) {
+	Ball *nBall = malloc(sizeof(Ball));
+	nBall->pos.x = x; nBall->pos.y = y; nBall->r = r; nBall->v.x = vx; nBall->v.y = vy;
+	
+	//Í·²¿²åÈë
+	Ball_listNode *next = Ball_listHead->next;
+	Ball_listHead->next = malloc(sizeof(Ball_listNode));
+	Ball_listHead->next->next = next;
+	Ball_listHead->next->ball = nBall;
+}
+
+
+int main(void) {
 	fGPIO_Init(); 
-	fCreatPos(); //´´½¨ÆðÊ¼µãÎ»ÖÃ¼°ÔË¶¯·½Ïò
-	 
 	delay_init();	    	 //ÑÓÊ±º¯Êý³õÊ¼»¯	  
 	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);	 //ÉèÖÃNVICÖÐ¶Ï·Ö×é2:2Î»ÇÀÕ¼ÓÅÏÈ¼¶£¬2Î»ÏìÓ¦ÓÅÏÈ¼¶ 
 	LCD_Init();
-	LCD_Clear(BLACK);
-	POINT_COLOR = WHITE;
-	 
-	LCD_DrawRectangle(cMINX,cMINY,cMAXX,cMAXY);
-	fPaintBall(cBALLCOLOR);
-	while(1){
-		fPaintBall(cBACKCOLOR);//²Á³ýÖ®Ç°Ô²
-		fNewPos();//Éú³ÉÐÂµãÎ»ÖÃ¼°ÔË¶¯·½Ïò
-		fPaintBall(cBALLCOLOR);//ÐÂÎ»ÖÃ»­Ô²
-		if(( vfPosX == cMAXX || vfPosX == cMINX ) || ( vfPosY == cMAXY || vfPosY == cMINY ) )
-		{
-			//fBeep(cBEEP_ON);
-		}
-		else
-		{
-			fBeep(cBEEP_OFF);
-		}
-		fDelayUs(10000);
+	LCD_Clear(BK_COLOR);
+	POINT_COLOR = FRONT_COLOR;
+
+	Ball_init();
+	
+	//BallList_addNewBall( 50, 50, 10, 1, 0);
+	//BallList_addNewBall( 100, 50, 10, -1, 0);
+	for(int i=0 ; i<10 ; ++i) {
+		BallList_addNewBall(random(30, SCREEN_WIDTH-30), random(30, SCREEN_HEIGHT-30), 10, random(-10, 10)/2.0, random(-10,10)/ 2.0);
+	}
+	
+	while(1) {
+		BallList_draw(BK_COLOR);
+		BallList_update();
+		BallList_draw(FRONT_COLOR);
+		fBeep(cBEEP_OFF);
+		fDelayUs(200000);
 	}
 }
  
-
-//================================================================
-//º¯ÊýÃû³Æ£ºvoid fNewPos(void)
-//º¯Êý¹¦ÄÜ£ºÉú³ÉÐÂµÄÎ»ÖÃµã×ø±ê
-//Èë¿Ú²ÎÊý£ºvfPosX µ±Ç° x,vfPosYµ±Ç° y ,vfDx x·½Ïò±ä»¯Á¿,vfDy y·½Ïò±ä»¯Á¿
-//³ö¿Ú²ÎÊý£ºvfPosX ÐÂÎ»ÖÃµÄx,vfPosYÐÂÎ»ÖÃµÄy ,vfDx x·½Ïò±ä»¯Á¿,vfDy y·½Ïò±ä»¯Á
-//º¯Êýµ÷ÓÃ£º
-//º¯ÊýËµÃ÷£º
-void fNewPos(void)
-{
-		float nPosx = vfPosX + vfDx;
-		float nPosy = vfPosY + vfDy;
-		if(nPosx + c8R >= cMAXX - EPS || nPosx - c8R <= cMINX + EPS) {
-			vfDx *= -1;
-		}
-		if(nPosy + c8R >= cMAXY - EPS || nPosy - c8R <= cMINY + EPS) {
-			vfDy *= -1;
-		}
-		vfPosX = vfPosX + vfDx ;
-		vfPosY = vfPosY + vfDy ;
-} 
-
-
-//º¯ÊýÃû³Æ£ºvoid fCreatPos(void)
-//º¯Êý¹¦ÄÜ£º´´½¨Ò»¸öËæ»úµã(40,40)-(200-280)Ö®¼äµÄÒ»¸öµã
-//Èë¿Ú²ÎÊý£º
-//³ö¿Ú²ÎÊý£ºvfPosX x×ø±ê,vfPosY y×ø±ê,vfDx x·½Ïò±ä»¯Á¿,vfDy y·½Ïò±ä»¯Á¿
-//º¯Êýµ÷ÓÃ£ºsrand,rand;
-//º¯ÊýËµÃ÷£ºÓÃÎ±Ëæ»úº¯Êý£¬¸ù¾Ý°´¼üÊ±¼äÀ´´´½¨Ëæ»úµã
-void fCreatPos(void)
-{
-	fSysTick_Set(1) ; //Æô¶¯1us¶¨Ê±
-	while(fKEY_GetKeyValue() == 0);//µÈ´ý°´¼ü
-	while(fKEY_RdPin() != 0) ;//µÈ´ý¼üÊÍ·Å
-	srand(vu16Time);//vu16TimeÔÚSysTick_HandlerÖÐ ¼Ó1¡£×÷ÎªËæ»úÊýÖÖ×Ó
-	vfPosX  =  rand() % 159 + 41 ;//µÃµ½Ëæ»ú×ø±êXÖµ
-	srand(vu16Time);
-	vfPosY  =  rand() % 239 + 41 ;//µÃµ½Ëæ»ú×ø±êYÖµ
-	srand(vu16Time);
-	vfDx =  rand() % 21 - 10; //µÃµ½Ëæ»úX·½Ïò¸Ä±äÁ¿
-	srand(vu16Time);
-	vfDy =  rand() % 21 - 10; //µÃµ½Ëæ»úY·½Ïò¸Ä±äÁ¿
-	fSysTick_Set(100000) ; 
-	//ÒÔÏÂ´¦ÀíÊ¹µÃ  vfDy = vfDy/vfDx£¬vfDx = 1 »òÕß -1£¬  
-	//ÕâÑùX·½ÏòÃ¿´Î±ä»¯Á¿Îª 1£¬Ê¹µÃÒÆ¶¯Æ½»¬
-	vfDTmp = vfDx ;
-    if (( vfDx == 0 ) && (vfDy == 0)) 
-	{
-		vfDx = 1;
-	}
-	else
-	{
-		if(vfDTmp > 0 )
-		{
-			vfDx = 1; 
-			vfDy = vfDy / vfDTmp ;
-		}
-		else
-		{
-			if(vfDTmp < 0 )
-			{
-				vfDx = -1 ; 
-				vfDy = (-1) * vfDy / vfDTmp ;
-			}
-		}
-	}
-}
-
-//º¯ÊýÃû³Æ£ºvoid fPaintBall(u16 v16Color)
-//º¯Êý¹¦ÄÜ£ºÔÚµ±Ç°Î»ÖÃ£¨vfPosX,vfPosY,°ë¾¶c8R £©ÓÃv16ColorÑÕÉ«»­Ò»¸öÔ²
-//Èë¿Ú²ÎÊý£ºvfPosX µ±Ç° x,vfPosYµ±Ç° y ,°ë¾¶c8R, v16ColorÑÕÉ«
-//³ö¿Ú²ÎÊý£º
-//º¯Êýµ÷ÓÃ£ºvoid fNewPos(void)  Éú³ÉÏÂÒ»µã×ø±ê
-//			void fCreatPos(void) ´´½¨ÆðÊ¼µã×ø±ê
-//º¯ÊýËµÃ÷£º
-void fPaintBall(u16 v16Color)
-{
-	POINT_COLOR = v16Color;
-	LCD_Draw_Circle(vfPosX,vfPosY,c8R);
-	LCD_Draw_Circle(vfPosX,vfPosY,c8R-1);
-	LCD_Draw_Circle(vfPosX,vfPosY,c8R-2);
-}
